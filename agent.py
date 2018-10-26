@@ -51,6 +51,8 @@ class AgentReinforce:
         def __init__(self, experiment_name):
             self.experiment_name = experiment_name
 
+            self.e_greedy = 0.1
+
             self.use_gpu = False
 
             self.learning_rate = 1e-3
@@ -108,7 +110,7 @@ class AgentReinforce:
 
             self.summaries = tf.summary.merge_all()
 
-        with tf.name_scope('a2c_aux_summary'):
+        with tf.name_scope('reinforce_aux_summary'):
             self.avg_reward_placeholder = tf.placeholder(tf.float32, [])
             self.avg_length_placeholder = tf.placeholder(tf.float32, [])
             tf.summary.scalar('avg_reward', self.avg_reward_placeholder, collections=['aux'])
@@ -161,6 +163,11 @@ class AgentReinforce:
             feed_dict={self.policy.x: [observation]}
         )
         return actions_batch[0]
+
+    def _epsilon_greedy(self, action, env):
+        if np.random.random() < self.params.e_greedy:
+            return np.random.randint(env.action_space.n)
+        return action
 
     def _train_step(self, step, observations, actions, episode_reward):
         with_summaries = (step % self.params.summaries_every == 0)  # prevent summaries folder from growing too large
@@ -226,6 +233,8 @@ class AgentReinforce:
             done = False
             while not done:
                 action = self._get_action(observation)
+                action = self._epsilon_greedy(action, env)
+
                 observation, reward, done, _ = env.step(action)
                 episode_len += 1
 
