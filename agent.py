@@ -51,7 +51,7 @@ class AgentReinforce:
         def __init__(self, experiment_name):
             self.experiment_name = experiment_name
 
-            self.e_greedy = 0.1
+            self.e_greedy = 0.05
 
             self.use_gpu = False
 
@@ -242,7 +242,6 @@ class AgentReinforce:
                 reward = self._modify_reward_position(x)
 
                 if done and episode_len < 200:
-                    reward = 10
                     log.info('Solved in %d steps!', episode_len)
 
                 observations.append(observation)
