@@ -1,27 +1,31 @@
-import gym
-import sys
+import time
 
-from agent import AgentReinforce
+from reinforce.agent import AgentReinforce
 
-from utils import log, CURRENT_ENV, CURRENT_EXPERIMENT, get_experiment_name
+from misc.utils import log
 
 
 def run_policy_loop(agent, env, max_num_episodes, deterministic=False):
     """Execute the policy and render onto the screen, using the standard agent interface."""
+    fps = env.metadata.get('video.frames_per_second')
+
     agent.initialize()
 
     episode_rewards = []
-    for _ in range(max_num_episodes):
+    for i in range(max_num_episodes):
         obs, done = env.reset(), False
-        episode_reward = 0
+        episode_reward = episode_len = 0
 
         while not done:
             env.render()
+            time.sleep(1 / fps)
             action = agent.best_action(obs, deterministic=deterministic)
             obs, rew, done, _ = env.step(action)
+            episode_len += 1
             episode_reward += rew
 
         env.render()
+        time.sleep(2 * (1 / fps))
 
         episode_rewards.append(episode_reward)
         last_episodes = episode_rewards[-100:]
@@ -35,19 +39,7 @@ def run_policy_loop(agent, env, max_num_episodes, deterministic=False):
     return 0
 
 
-def enjoy(env_id, params, max_num_episodes=1000000):
-    env = gym.make(env_id)
+def enjoy(env, params, max_num_episodes=1000000, deterministic=False):
     env.seed(0)
-
     agent = AgentReinforce(env, params)
-    return run_policy_loop(agent, env, max_num_episodes)
-
-
-def main():
-    env_id = CURRENT_ENV
-    params = AgentReinforce.Params(get_experiment_name(env_id, CURRENT_EXPERIMENT))
-    return enjoy(env_id, params)
-
-
-if __name__ == '__main__':
-    sys.exit(main())
+    return run_policy_loop(agent, env, max_num_episodes, deterministic)

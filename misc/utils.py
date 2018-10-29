@@ -6,8 +6,9 @@ from os.path import join
 from colorlog import ColoredFormatter
 
 
-CURRENT_EXPERIMENT = 'reinforce_v000'
-CURRENT_ENV = 'MountainCar-v0'
+CURRENT_EXPERIMENT = 'reinforce_v022_batch'
+MOUNTAINCAR_ENV = 'MountainCar-v0'
+CARTPOLE_ENV = 'CartPole-v0'
 
 
 def init_logger():
@@ -54,7 +55,7 @@ def project_root():
     Keep models, parameters and summaries at the root of this project's directory tree.
     :return: full path to the root dir of this project.
     """
-    return os.path.dirname(__file__)
+    return os.path.dirname(os.path.dirname(__file__))
 
 
 def experiments_dir():
