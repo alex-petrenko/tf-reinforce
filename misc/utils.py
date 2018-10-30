@@ -6,10 +6,7 @@ from os.path import join
 from colorlog import ColoredFormatter
 
 
-CURRENT_EXPERIMENT = 'reinforce_v022_batch'
-MOUNTAINCAR_ENV = 'MountainCar-v0'
-CARTPOLE_ENV = 'CartPole-v0'
-
+# Logging
 
 def init_logger():
     handler = logging.StreamHandler()
@@ -31,7 +28,7 @@ def init_logger():
     )
     handler.setFormatter(formatter)
 
-    logger = logging.getLogger('attcap')
+    logger = logging.getLogger('reinforce')
     logger.setLevel(logging.DEBUG)
     logger.handlers = []       # No duplicated handlers
     logger.propagate = False   # workaround for duplicated logs in ipython
@@ -78,3 +75,8 @@ def summaries_dir(experiment):
 
 def get_experiment_name(env_id, name):
     return '{}-{}'.format(env_id, name)
+
+
+CURRENT_EXPERIMENT = 'reinforce_v001'
+MOUNTAINCAR_ENV = 'MountainCar-v0'
+CARTPOLE_ENV = 'CartPole-v0'

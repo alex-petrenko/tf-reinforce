@@ -1,5 +1,6 @@
 import sys
 import time
+
 import numpy as np
 import tensorflow as tf
 
@@ -14,6 +15,7 @@ EPS = 1e-9
 class CategoricalPd:
     def __init__(self, logits):
         self.logits = logits
+        self.prob = tf.nn.softmax(self.logits)
 
     def neglogp(self, x):
         x = tf.one_hot(x, self.logits.get_shape().as_list()[-1])
@@ -26,22 +28,25 @@ class CategoricalPd:
         p0 = ea0 / z0
         return tf.reduce_sum(p0 * (tf.log(z0 + EPS) - a0), axis=-1)
 
-    def sample(self):
-        u = tf.random_uniform(tf.shape(self.logits), dtype=self.logits.dtype)
-        return tf.argmax(self.logits - tf.log(-tf.log(u)), axis=-1)
-
 
 class StochasticPolicy:
     def __init__(self, action_space, observation_shape, model):
         self.x = tf.placeholder(tf.float32, [None] + list(observation_shape), 'observation')
-
         num_actions = action_space.n
 
         if model == 'linear':
-            self.action_logits = tf.layers.dense(self.x, num_actions, activation=None)
-        elif model == 'mlp':
-            hidden = tf.layers.dense(self.x, 64, activation=tf.nn.relu)
+            hidden = tf.layers.dense(self.x, 64, activation=None)
             self.action_logits = tf.layers.dense(hidden, num_actions, activation=None)
+        elif model == 'mlp':
+            hidden = tf.layers.dense(
+                self.x, 64, activation=tf.nn.relu, kernel_initializer=tf.contrib.layers.xavier_initializer(seed=1),
+            )
+            hidden = tf.layers.dense(
+                hidden, 64, activation=tf.nn.relu, kernel_initializer=tf.contrib.layers.xavier_initializer(seed=1),
+            )
+            self.action_logits = tf.layers.dense(
+                hidden, num_actions, activation=None, kernel_initializer=tf.contrib.layers.xavier_initializer(seed=1),
+            )
         else:
             raise Exception('Unknown model')
 
@@ -50,7 +55,14 @@ class StochasticPolicy:
 
         self.action_distribution = CategoricalPd(self.action_logits)
         self.best_action_deterministic = tf.argmax(self.action_logits, axis=1)
-        self.act = self.action_distribution.sample()
+
+        self.timesteps = tf.placeholder(tf.float32, [None], 'timesteps')
+        timesteps = tf.reshape(self.timesteps, [-1, 1])
+        log_timesteps = tf.log(timesteps + 1.0)
+        value_input = tf.concat([hidden, log_timesteps], axis=1)
+        value_h = tf.layers.dense(value_input, 64, activation=tf.nn.relu)
+        value = tf.layers.dense(value_h, 1, activation=None)
+        self.value = tf.squeeze(value, axis=[1])
 
 
 class AgentReinforce:
@@ -58,15 +70,17 @@ class AgentReinforce:
         def __init__(self, experiment_name):
             self.experiment_name = experiment_name
 
-            self.gamma = 0.995
-            self.min_e_greedy = 0.1
+            self.repeat_action = 1
 
+            self.gamma = 0.99
+            self.initial_e_greedy = 0.5
+            self.min_e_greedy = 0.1
             self.model = 'mlp'
 
             self.use_gpu = False
 
-            self.learning_rate = 1e-4
-            self.batch_size = 2048
+            self.learning_rate = 2e-4
+            self.min_batch_size = 512
             self.train_for = 1000000
 
             self.stats_episodes = 100
@@ -101,7 +115,7 @@ class AgentReinforce:
         self.update_success_rate = update_best_value(self.best_success_rate, self.success_rate_placeholder)
 
         self.e_greedy_coeff = tf.train.exponential_decay(
-            0.2, tf.cast(global_step, tf.float32), 50.0, 0.95, staircase=True,
+            self.params.initial_e_greedy, tf.cast(global_step, tf.float32), 50.0, 0.95, staircase=True,
         )
         self.e_greedy_coeff = tf.maximum(self.e_greedy_coeff, self.params.min_e_greedy)
 
@@ -116,21 +130,19 @@ class AgentReinforce:
         self.neglogp_actions = self.policy.action_distribution.neglogp(self.selected_actions)
 
         # maximize probabilities of actions that give high advantage
-        loss = tf.reduce_mean(self.neglogp_actions * self.discounted_rewards)
+        action_loss = tf.reduce_mean(self.neglogp_actions * self.discounted_rewards)
 
-        # training
-        self.train = tf.contrib.layers.optimize_loss(
-            loss=loss,
-            global_step=global_step,
-            learning_rate=self.params.learning_rate,
-            optimizer=tf.train.AdamOptimizer,
-            clip_gradients=1.0,
-        )
+        # optimize the value estimation for better baseline
+        value_loss = tf.losses.absolute_difference(self.policy.value, self.discounted_rewards)
+
+        loss = action_loss  # + value_loss
+
+        self.train = tf.train.AdamOptimizer(self.params.learning_rate).minimize(loss, global_step=global_step)
 
         # summaries for the agent and the training process
         with tf.name_scope('reinforce_agent_summary'):
             tf.summary.histogram('actions', self.policy.action_logits)
-            tf.summary.scalar('action_avg', tf.reduce_mean(tf.to_float(self.policy.act)))
+            tf.summary.histogram('actions_prob', self.policy.action_distribution.prob)
 
             tf.summary.histogram('selected_actions', self.selected_actions)
             tf.summary.scalar('selected_action_avg', tf.reduce_mean(tf.to_float(self.selected_actions)))
@@ -142,7 +154,8 @@ class AgentReinforce:
 
             tf.summary.scalar('e_greedy', self.e_greedy_coeff)
 
-            tf.summary.scalar('loss', loss)
+            tf.summary.scalar('action_loss', action_loss)
+            # tf.summary.scalar('value_loss', value_loss)
 
             summary_dir = summaries_dir(self.params.experiment_name)
             self.summary_writer = tf.summary.FileWriter(summary_dir)
@@ -211,11 +224,20 @@ class AgentReinforce:
             )
 
     def _get_action(self, observation, deterministic=False):
-        actions_batch = self.session.run(
-            self.policy.best_action_deterministic if deterministic else self.policy.act,
-            feed_dict={self.policy.x: [observation]}
+        if deterministic:
+            return self.session.run(
+                self.policy.best_action_deterministic,
+                feed_dict={self.policy.x: [observation]},
+            ).ravel()
+
+        actions_prob = self.session.run(
+            self.policy.action_distribution.prob,
+            feed_dict={self.policy.x: [observation]},
         )
-        return actions_batch[0]
+
+        actions_prob = np.ravel(actions_prob)
+        action = np.random.choice(len(actions_prob), p=actions_prob)
+        return action
 
     @staticmethod
     def _epsilon_greedy(action, env, e_greedy):
@@ -223,7 +245,16 @@ class AgentReinforce:
             return np.random.randint(env.action_space.n)
         return action
 
-    def _train_step(self, step, observations, actions, discounted_rewards):
+    def _calculate_baseline(self, observations, timesteps):
+        return self.session.run(
+            self.policy.value,
+            feed_dict={
+                self.policy.x: observations,
+                self.policy.timesteps: np.array(timesteps).astype(np.float32),
+            }
+        )
+
+    def _train_policy_step(self, step, observations, timesteps, actions, discounted_rewards):
         with_summaries = (step % self.params.summaries_every == 0)  # prevent summaries folder from growing too large
         summaries = [self.summaries] if with_summaries else []
 
@@ -231,6 +262,7 @@ class AgentReinforce:
             [self.train] + summaries,
             feed_dict={
                 self.policy.x: observations,
+                # self.policy.timesteps: np.array(timesteps).astype(np.float32),
                 self.selected_actions: actions,
                 self.discounted_rewards: discounted_rewards,
             },
@@ -242,6 +274,19 @@ class AgentReinforce:
             self.summary_writer.add_summary(summary, global_step=step)
 
         return step
+
+    def _maybe_update_scoreboard(self, stats_episodes, avg_reward, avg_success_rate):
+        if stats_episodes >= self.params.stats_episodes:
+            if avg_reward > self.best_avg_reward.eval(session=self.session) + EPS:
+                log.info('New best reward %.3f!', avg_reward)
+
+            self.session.run(
+                [self.update_best_reward, self.update_success_rate],
+                feed_dict={
+                    self.avg_reward_placeholder: avg_reward,
+                    self.success_rate_placeholder: avg_success_rate,
+                },
+            )
 
     def _maybe_aux_summaries(self, step, avg_reward, avg_length, avg_success):
         if step % self.params.summaries_every == 0:
@@ -255,10 +300,9 @@ class AgentReinforce:
             )
             self.summary_writer.add_summary(summary, global_step=step)
 
-    def _rewards_to_go(self, rewards):
-        """Policy gradient should consider only rewards collected after the action was taken (not before)."""
+    def _discounted_rewards(self, rewards):
         total_reward = 0
-        rewards_to_go = np.zeros(len(rewards))
+        rewards_to_go = np.zeros_like(rewards)
         for i in reversed(range(len(rewards))):
             total_reward = rewards[i] + self.params.gamma * total_reward
             rewards_to_go[i] = total_reward
@@ -279,28 +323,34 @@ class AgentReinforce:
 
         update_hist_buffer = partial(update_hist_buffer_len, max_len=self.params.stats_episodes)
 
-        batch_size = self.params.batch_size
-        observations, actions, rewards, dones = [], [], [], []
+        min_batch_size = self.params.min_batch_size
+        observations, actions, rewards, timesteps = [], [], [], []
 
         while step < self.params.train_for:
             e_greedy_coeff = self.e_greedy_coeff.eval(session=self.session)
 
             observation = env.reset()
             episode_start = time.time()
-            episode_rewards = []
+            episode_obs, episode_rewards = [], []
             done = False
             while not done:
                 action = self._get_action(observation)
                 action = self._epsilon_greedy(action, env, e_greedy_coeff)
 
-                observation, reward, done, _ = env.step(action)
-                observations.append(observation)
-                actions.append(action)
-
-                episode_rewards.append(reward)
+                for _ in range(self.params.repeat_action):
+                    episode_obs.append(observation)
+                    observation, reward, done, _ = env.step(action)
+                    actions.append(action)
+                    episode_rewards.append(reward)
+                    if done:
+                        break
 
             # episode finished
             episode_len = len(episode_rewards)
+
+            observations.extend(episode_obs)
+            timesteps.extend(np.arange(episode_len))
+
             episode_reward = sum(episode_rewards)
             goal_reached = False
 
@@ -317,54 +367,43 @@ class AgentReinforce:
             avg_length = np.mean(stats_episode_lengths)
             avg_reward = np.mean(stats_rewards)
             avg_success_rate = sum(stats_goal) / len(stats_goal)
+            self._maybe_update_scoreboard(len(stats_rewards), avg_reward, avg_success_rate)
 
-            if len(stats_rewards) >= self.params.stats_episodes:
-                if avg_reward > self.best_avg_reward.eval(session=self.session):
-                    log.info('New best reward %.3f!', avg_reward)
+            # discounted_rewards = self._discounted_rewards(episode_rewards)
+            # baseline = self._calculate_baseline(episode_obs, np.arange(episode_len))
+            # discounted_rewards -= baseline
 
-                self.session.run(
-                    [self.update_best_reward, self.update_success_rate],
-                    feed_dict={
-                        self.avg_reward_placeholder: avg_reward,
-                        self.success_rate_placeholder: avg_success_rate,
-                    },
-                )
-
-            # calculate adjusted rewards-to-go for every timestep
             baseline_reward = avg_reward / episode_len
             # subtract baseline reward element-wise
             episode_rewards_baseline = np.asarray(episode_rewards) - baseline_reward
-            episode_rewards_to_go = self._rewards_to_go(episode_rewards_baseline)
-            rewards.extend(episode_rewards_to_go)
+            discounted_rewards = self._discounted_rewards(episode_rewards_baseline)
 
-            episode_max_abs_reward = np.max(np.abs(episode_rewards_to_go))
+            # if self.params.baseline_reward:
+            #     # baseline_reward = avg_reward / episode_len
+            #
+            #     discount = 1.0
+            #     for i, r in enumerate(discounted_rewards):
+            #         discounted_rewards[i] = discount * r
+            #         discount *= self.params.gamma
+            #
+            #     # update_hist_buffer_len(baseline_rewards, discounted_rewards, self.params.baseline_reward_episodes)
+            #     # subtract baseline reward element-wise
+            #     # episode_rewards_baseline = np.asarray(episode_rewards) - baseline_reward
+            # else:
+            #     discounted_rewards -= np.mean(discounted_rewards)
+            #     discounted_rewards /= np.std(discounted_rewards)
+
+            rewards.extend(discounted_rewards)
+
+            episode_max_abs_reward = np.max(np.abs(discounted_rewards))
             update_hist_buffer(stats_max_rewards, episode_max_abs_reward)
             assert len(rewards) == len(observations)
 
-            while len(observations) >= self.params.batch_size:
-                # we collected enough data for the training batch
-                shuffle = np.random.permutation(batch_size)
-
-                def split_batch(experience):
-                    batch = experience[:batch_size]
-                    batch = np.asarray(batch)[shuffle]
-                    experience = experience[batch_size:]
-                    return batch, experience
-
-                batch_obs, observations = split_batch(observations)
-                batch_actions, actions = split_batch(actions)
-                batch_rewards, rewards = split_batch(rewards)
-
-                if step % self.params.print_every == 0:
-                    log.info('Batch rewards max: %f min: %f std: %f', np.max(batch_rewards), np.min(batch_rewards), np.std(batch_rewards))
-
-                batch_rewards = batch_rewards / (np.max(stats_max_rewards) + EPS)
-
-                if step % self.params.print_every == 0:
-                    log.info('Batch rewards2 max: %f min: %f std: %f', np.max(batch_rewards), np.min(batch_rewards),
-                             np.std(batch_rewards))
-
-                step = self._train_step(step, batch_obs, batch_actions, batch_rewards)
+            while len(observations) >= min_batch_size:
+                # enough data for training step
+                step = self._train_policy_step(step, observations, timesteps, actions, rewards)
                 self._maybe_save(step, avg_reward)
                 self._maybe_print(step, avg_length, avg_reward, avg_success_rate, avg_fps)
                 self._maybe_aux_summaries(step, avg_reward, avg_length, avg_success_rate)
+
+                observations, actions, rewards, timesteps = [], [], [], []

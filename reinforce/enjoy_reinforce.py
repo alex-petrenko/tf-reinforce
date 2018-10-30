@@ -12,6 +12,7 @@ def run_policy_loop(agent, env, max_num_episodes, deterministic=False):
     agent.initialize()
 
     episode_rewards = []
+    goals_reached = []
     for i in range(max_num_episodes):
         obs, done = env.reset(), False
         episode_reward = episode_len = 0
@@ -23,6 +24,10 @@ def run_policy_loop(agent, env, max_num_episodes, deterministic=False):
             obs, rew, done, _ = env.step(action)
             episode_len += 1
             episode_reward += rew
+
+        if hasattr(env, 'reached_goal'):
+            goals_reached.append(env.reached_goal)
+            log.info('Avg success: %.3f', sum(goals_reached) / len(goals_reached))
 
         env.render()
         time.sleep(2 * (1 / fps))

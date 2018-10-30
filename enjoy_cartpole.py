@@ -1,17 +1,18 @@
-import gym
 import sys
 
 from reinforce.agent import AgentReinforce
 from reinforce.enjoy_reinforce import enjoy
 
-from misc.utils import CARTPOLE_ENV, CURRENT_EXPERIMENT, get_experiment_name
+from envs.cartpole_utils import make_cartpole_env
+from misc.utils import CURRENT_EXPERIMENT, get_experiment_name
 
 
 def main():
-    env_id = CARTPOLE_ENV
-    env = gym.make(env_id)
-    params = AgentReinforce.Params(get_experiment_name(env_id, CURRENT_EXPERIMENT))
-    return enjoy(env, params, deterministic=True)
+    env, env_id = make_cartpole_env()
+    custom_experiment = 'CartPole-v0-reinforce_v040_lr'
+    experiment = get_experiment_name(env_id, CURRENT_EXPERIMENT) if custom_experiment is None else custom_experiment
+    params = AgentReinforce.Params(experiment)
+    return enjoy(env, params, deterministic=False)
 
 
 if __name__ == '__main__':
