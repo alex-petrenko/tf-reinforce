@@ -38,15 +38,9 @@ class StochasticPolicy:
             hidden = tf.layers.dense(self.x, 64, activation=None)
             self.action_logits = tf.layers.dense(hidden, num_actions, activation=None)
         elif model == 'mlp':
-            hidden = tf.layers.dense(
-                self.x, 64, activation=tf.nn.relu, kernel_initializer=tf.contrib.layers.xavier_initializer(seed=1),
-            )
-            hidden = tf.layers.dense(
-                hidden, 64, activation=tf.nn.relu, kernel_initializer=tf.contrib.layers.xavier_initializer(seed=1),
-            )
-            self.action_logits = tf.layers.dense(
-                hidden, num_actions, activation=None, kernel_initializer=tf.contrib.layers.xavier_initializer(seed=1),
-            )
+            hidden = tf.layers.dense(self.x, 64, activation=tf.nn.relu)
+            hidden = tf.layers.dense(hidden, 64, activation=tf.nn.relu)
+            self.action_logits = tf.layers.dense(hidden, num_actions, activation=None)
         else:
             raise Exception('Unknown model')
 
@@ -133,6 +127,7 @@ class AgentReinforce:
         action_loss = tf.reduce_mean(self.neglogp_actions * self.discounted_rewards)
 
         # optimize the value estimation for better baseline
+        # TODO remove
         value_loss = tf.losses.absolute_difference(self.policy.value, self.discounted_rewards)
 
         loss = action_loss  # + value_loss
@@ -254,7 +249,7 @@ class AgentReinforce:
             }
         )
 
-    def _train_policy_step(self, step, observations, timesteps, actions, discounted_rewards):
+    def _train_policy_step(self, step, observations, actions, discounted_rewards):
         with_summaries = (step % self.params.summaries_every == 0)  # prevent summaries folder from growing too large
         summaries = [self.summaries] if with_summaries else []
 
@@ -262,7 +257,6 @@ class AgentReinforce:
             [self.train] + summaries,
             feed_dict={
                 self.policy.x: observations,
-                # self.policy.timesteps: np.array(timesteps).astype(np.float32),
                 self.selected_actions: actions,
                 self.discounted_rewards: discounted_rewards,
             },
@@ -324,7 +318,7 @@ class AgentReinforce:
         update_hist_buffer = partial(update_hist_buffer_len, max_len=self.params.stats_episodes)
 
         min_batch_size = self.params.min_batch_size
-        observations, actions, rewards, timesteps = [], [], [], []
+        observations, actions, rewards = [], [], []
 
         while step < self.params.train_for:
             e_greedy_coeff = self.e_greedy_coeff.eval(session=self.session)
@@ -349,7 +343,6 @@ class AgentReinforce:
             episode_len = len(episode_rewards)
 
             observations.extend(episode_obs)
-            timesteps.extend(np.arange(episode_len))
 
             episode_reward = sum(episode_rewards)
             goal_reached = False
@@ -401,9 +394,9 @@ class AgentReinforce:
 
             while len(observations) >= min_batch_size:
                 # enough data for training step
-                step = self._train_policy_step(step, observations, timesteps, actions, rewards)
+                step = self._train_policy_step(step, observations, actions, rewards)
                 self._maybe_save(step, avg_reward)
                 self._maybe_print(step, avg_length, avg_reward, avg_success_rate, avg_fps)
                 self._maybe_aux_summaries(step, avg_reward, avg_length, avg_success_rate)
 
-                observations, actions, rewards, timesteps = [], [], [], []
+                observations, actions, rewards = [], [], []
