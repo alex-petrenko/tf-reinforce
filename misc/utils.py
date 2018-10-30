@@ -1,5 +1,6 @@
 import os
 import logging
+import argparse
 
 from os.path import join
 
@@ -69,6 +70,19 @@ def model_dir(experiment):
 
 def summaries_dir(experiment):
     return ensure_dir_exists(join(experiment_dir(experiment), '.summary'))
+
+
+# Command line arguments
+
+def parse_args():
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    # common args
+    parser.add_argument('--experiment', type=str, default=None)
+    args = parser.parse_args()
+    for arg in vars(args):
+        log.info('%s %r', arg, getattr(args, arg))
+    return args
 
 
 # Keeping track of experiments

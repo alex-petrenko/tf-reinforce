@@ -4,18 +4,22 @@ from reinforce.agent import AgentReinforce
 from reinforce.train_reinforce import train
 
 from envs.mountaincar_utils import make_mountaincar_env
-from misc.utils import CURRENT_EXPERIMENT, get_experiment_name
+from misc.utils import CURRENT_EXPERIMENT, get_experiment_name, parse_args
 
 
 def main():
     """Script entry point."""
+    args = parse_args()
+    experiment = args.experiment
+
     env, env_id = make_mountaincar_env()
-    custom_experiment = 'MountainCar-v0-reinforce_v043_test'
-    experiment = get_experiment_name(env_id, CURRENT_EXPERIMENT) if custom_experiment is None else custom_experiment
+    if experiment is None:
+        experiment = get_experiment_name(env_id, CURRENT_EXPERIMENT)
+
     params = AgentReinforce.Params(experiment)
-    params.learning_rate = 5e-5
+    params.learning_rate = 1e-4
     params.repeat_action = 4
-    params.stats_episodes = 100
+
     return train(env, params)
 
 

@@ -4,15 +4,19 @@ from reinforce.agent import AgentReinforce
 from reinforce.train_reinforce import train
 
 from envs.cartpole_utils import make_cartpole_env
-from misc.utils import CURRENT_EXPERIMENT, get_experiment_name
+from misc.utils import CURRENT_EXPERIMENT, get_experiment_name, parse_args
 
 
 def main():
     """Script entry point."""
-    env, env_id = make_cartpole_env()
-    params = AgentReinforce.Params(get_experiment_name(env_id, CURRENT_EXPERIMENT))
+    args = parse_args()
+    experiment = args.experiment
 
-    # no additional exploration required, policy stochasticity is enough for cartpole
+    env, env_id = make_cartpole_env()
+    if experiment is None:
+        experiment = get_experiment_name(env_id, CURRENT_EXPERIMENT)
+
+    params = AgentReinforce.Params(experiment)
     params.initial_e_greedy = 0.2
     params.min_e_greedy = 0.00
     params.gamma = 0.95
