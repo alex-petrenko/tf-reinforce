@@ -9,8 +9,8 @@ for details.
 
 #### MountainCar-v0
 
-Train a REINFORCE agent on Gym MountainCar-v0 environment (feel free to stop training when the desired average episode
-reward is achieved, it tops at around 105-110):
+Train a REINFORCE agent on Gym MountainCar-v0 environment (feel free to stop training when the desired episode
+reward is achieved, it tops at around -105 to -110 on average, but it may take a long time):
 
 ```shell
 python -m train_mountaincar
