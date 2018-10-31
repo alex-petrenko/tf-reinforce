@@ -17,7 +17,6 @@ def main():
         experiment = get_experiment_name(env_id, CURRENT_EXPERIMENT)
 
     params = AgentReinforce.Params(experiment)
-    params.learning_rate = 1e-4
     params.repeat_action = 4
 
     return train(env, params)

@@ -44,19 +44,8 @@ class StochasticPolicy:
         else:
             raise Exception('Unknown model')
 
-        self.weights = tf.get_default_graph().get_tensor_by_name(self.action_logits.name.split('/')[0] + '/kernel:0')
-        self.biases = tf.get_default_graph().get_tensor_by_name(self.action_logits.name.split('/')[0] + '/bias:0')
-
         self.action_distribution = CategoricalPd(self.action_logits)
         self.best_action_deterministic = tf.argmax(self.action_logits, axis=1)
-
-        self.timesteps = tf.placeholder(tf.float32, [None], 'timesteps')
-        timesteps = tf.reshape(self.timesteps, [-1, 1])
-        log_timesteps = tf.log(timesteps + 1.0)
-        value_input = tf.concat([hidden, log_timesteps], axis=1)
-        value_h = tf.layers.dense(value_input, 64, activation=tf.nn.relu)
-        value = tf.layers.dense(value_h, 1, activation=None)
-        self.value = tf.squeeze(value, axis=[1])
 
 
 class AgentReinforce:
@@ -66,16 +55,14 @@ class AgentReinforce:
 
             self.repeat_action = 1
 
-            self.gamma = 0.99
-            self.initial_e_greedy = 0.5
-            self.min_e_greedy = 0.1
+            self.gamma = 0.95
             self.model = 'mlp'
 
             self.use_gpu = False
 
-            self.learning_rate = 2e-4
+            self.learning_rate = 1e-4
             self.min_batch_size = 512
-            self.train_for = 1000000
+            self.train_for = 100000
 
             self.stats_episodes = 100
             self.print_every = 100
@@ -108,11 +95,6 @@ class AgentReinforce:
         self.update_best_saved_reward = update_best_value(self.best_saved_reward, self.avg_reward_placeholder)
         self.update_success_rate = update_best_value(self.best_success_rate, self.success_rate_placeholder)
 
-        self.e_greedy_coeff = tf.train.exponential_decay(
-            self.params.initial_e_greedy, tf.cast(global_step, tf.float32), 50.0, 0.95, staircase=True,
-        )
-        self.e_greedy_coeff = tf.maximum(self.e_greedy_coeff, self.params.min_e_greedy)
-
         action_space = env.action_space
         observation_shape = env.observation_space.shape
 
@@ -124,15 +106,15 @@ class AgentReinforce:
         self.neglogp_actions = self.policy.action_distribution.neglogp(self.selected_actions)
 
         # maximize probabilities of actions that give high advantage
-        action_loss = tf.reduce_mean(self.neglogp_actions * self.discounted_rewards)
+        loss = tf.reduce_mean(self.neglogp_actions * self.discounted_rewards)
 
-        # optimize the value estimation for better baseline
-        # TODO remove
-        value_loss = tf.losses.absolute_difference(self.policy.value, self.discounted_rewards)
-
-        loss = action_loss  # + value_loss
-
-        self.train = tf.train.AdamOptimizer(self.params.learning_rate).minimize(loss, global_step=global_step)
+        self.train = tf.contrib.layers.optimize_loss(
+            loss=loss,
+            global_step=global_step,
+            learning_rate=self.params.learning_rate,
+            optimizer=tf.train.AdamOptimizer,
+            clip_gradients=0.005,
+        )
 
         # summaries for the agent and the training process
         with tf.name_scope('reinforce_agent_summary'):
@@ -144,13 +126,7 @@ class AgentReinforce:
 
             tf.summary.scalar('policy_entropy', tf.reduce_mean(self.policy.action_distribution.entropy()))
 
-            tf.summary.histogram('weights', self.policy.weights)
-            tf.summary.histogram('biases', self.policy.biases)
-
-            tf.summary.scalar('e_greedy', self.e_greedy_coeff)
-
-            tf.summary.scalar('action_loss', action_loss)
-            # tf.summary.scalar('value_loss', value_loss)
+            tf.summary.scalar('loss', loss)
 
             summary_dir = summaries_dir(self.params.experiment_name)
             self.summary_writer = tf.summary.FileWriter(summary_dir)
@@ -234,21 +210,6 @@ class AgentReinforce:
         action = np.random.choice(len(actions_prob), p=actions_prob)
         return action
 
-    @staticmethod
-    def _epsilon_greedy(action, env, e_greedy):
-        if np.random.random() < e_greedy:
-            return np.random.randint(env.action_space.n)
-        return action
-
-    def _calculate_baseline(self, observations, timesteps):
-        return self.session.run(
-            self.policy.value,
-            feed_dict={
-                self.policy.x: observations,
-                self.policy.timesteps: np.array(timesteps).astype(np.float32),
-            }
-        )
-
     def _train_policy_step(self, step, observations, actions, discounted_rewards):
         with_summaries = (step % self.params.summaries_every == 0)  # prevent summaries folder from growing too large
         summaries = [self.summaries] if with_summaries else []
@@ -308,7 +269,7 @@ class AgentReinforce:
 
         step = tf.train.global_step(self.session, tf.train.get_global_step())
 
-        stats_episode_lengths, stats_rewards, stats_goal, stats_max_rewards = [], [], [], []
+        stats_episode_lengths, stats_rewards, stats_goal = [], [], []
 
         def update_hist_buffer_len(buffer, value, max_len):
             buffer.append(value)
@@ -321,15 +282,12 @@ class AgentReinforce:
         observations, actions, rewards = [], [], []
 
         while step < self.params.train_for:
-            e_greedy_coeff = self.e_greedy_coeff.eval(session=self.session)
-
             observation = env.reset()
             episode_start = time.time()
             episode_obs, episode_rewards = [], []
             done = False
             while not done:
                 action = self._get_action(observation)
-                action = self._epsilon_greedy(action, env, e_greedy_coeff)
 
                 for _ in range(self.params.repeat_action):
                     episode_obs.append(observation)
@@ -362,34 +320,11 @@ class AgentReinforce:
             avg_success_rate = sum(stats_goal) / len(stats_goal)
             self._maybe_update_scoreboard(len(stats_rewards), avg_reward, avg_success_rate)
 
-            # discounted_rewards = self._discounted_rewards(episode_rewards)
-            # baseline = self._calculate_baseline(episode_obs, np.arange(episode_len))
-            # discounted_rewards -= baseline
-
             baseline_reward = avg_reward / episode_len
             # subtract baseline reward element-wise
             episode_rewards_baseline = np.asarray(episode_rewards) - baseline_reward
             discounted_rewards = self._discounted_rewards(episode_rewards_baseline)
-
-            # if self.params.baseline_reward:
-            #     # baseline_reward = avg_reward / episode_len
-            #
-            #     discount = 1.0
-            #     for i, r in enumerate(discounted_rewards):
-            #         discounted_rewards[i] = discount * r
-            #         discount *= self.params.gamma
-            #
-            #     # update_hist_buffer_len(baseline_rewards, discounted_rewards, self.params.baseline_reward_episodes)
-            #     # subtract baseline reward element-wise
-            #     # episode_rewards_baseline = np.asarray(episode_rewards) - baseline_reward
-            # else:
-            #     discounted_rewards -= np.mean(discounted_rewards)
-            #     discounted_rewards /= np.std(discounted_rewards)
-
             rewards.extend(discounted_rewards)
-
-            episode_max_abs_reward = np.max(np.abs(discounted_rewards))
-            update_hist_buffer(stats_max_rewards, episode_max_abs_reward)
             assert len(rewards) == len(observations)
 
             while len(observations) >= min_batch_size:

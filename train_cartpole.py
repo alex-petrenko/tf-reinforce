@@ -17,11 +17,9 @@ def main():
         experiment = get_experiment_name(env_id, CURRENT_EXPERIMENT)
 
     params = AgentReinforce.Params(experiment)
-    params.initial_e_greedy = 0.2
-    params.min_e_greedy = 0.00
     params.gamma = 0.95
-    params.learning_rate = 1e-4
-    params.min_batch_size = 1  # do training step after every episode
+    params.learning_rate = 1e-3
+    params.min_batch_size = 1  # do a training step after every episode
 
     return train(env, params)
 
