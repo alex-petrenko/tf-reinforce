@@ -80,8 +80,6 @@ def parse_args():
     # common args
     parser.add_argument('--experiment', type=str, default=None)
     args = parser.parse_args()
-    for arg in vars(args):
-        log.info('%s %r', arg, getattr(args, arg))
     return args
 
 

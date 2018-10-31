@@ -20,6 +20,7 @@ def main():
     params.gamma = 0.95
     params.learning_rate = 1e-3
     params.min_batch_size = 1  # do a training step after every episode
+    params.train_for = 500
 
     return train(env, params)
 
