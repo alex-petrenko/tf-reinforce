@@ -22,7 +22,7 @@ Monitor the training progress in Tensorboard:
 tensorboard --logdir .experiments/
 ```
 
-The model with the best reward will be saved to file system, use the following command to visualize
+Model with the best average reward will be saved to the filesystem, use the following command to visualize
 the policy behavior:
 
 ```shell
@@ -34,14 +34,14 @@ python -m enjoy_mountaincar
 
 #### CartPole-v0
 
-Train it Gym CartPole-v0 environment
-(trains much faster than MountainCar, 200 episodes is generally enough for a good policy):
+Train on Gym CartPole-v0 environment
+(trains much faster than MountainCar, mere 200 episodes should be enough for a good policy):
 
 ```shell
 python -m train_cartpole
 ```
 
-Monitor the training progress in Tensorboard:
+Monitor the training progress:
 
 ```shell
 tensorboard --logdir .experiments/
